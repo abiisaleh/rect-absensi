@@ -1,0 +1,6 @@
+{
+  "name": "Form Absensi Online",
+  "description": "Formulir absensi kehadiran digital dengan tanda tangan (signature pad) dan penyimpanan database Supabase.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
