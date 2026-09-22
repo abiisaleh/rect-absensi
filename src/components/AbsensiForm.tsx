@@ -1,28 +1,33 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import confetti from 'canvas-confetti';
 import {
   User,
   Briefcase,
   Calendar,
   Clock,
-  FileText,
   Send,
   CheckCircle2,
   AlertTriangle,
   RotateCcw,
-  Sparkles,
+  Timer,
+  AlertCircle,
+  Share2,
 } from 'lucide-react';
-import confetti from 'canvas-confetti';
 import { SignaturePad } from './SignaturePad';
+import { ShareModal } from './ShareModal';
 import { submitAbsensiToDatabase } from '../lib/supabase';
-import { AbsensiRecord, JabatanType } from '../types';
+import { AbsensiRecord, KegiatanSession } from '../types';
 
 interface AbsensiFormProps {
   onSuccess: (newRecord: AbsensiRecord, source: 'supabase' | 'local') => void;
   supabaseConfigured: boolean;
-  onOpenSettings: () => void;
+  onOpenSettings?: () => void;
+  session?: KegiatanSession | null;
+  onBackToIndex?: () => void;
+  standalone?: boolean;
 }
 
-const JABATAN_OPTIONS: JabatanType[] = [
+const DEFAULT_JABATAN_OPTIONS: string[] = [
   'Direktur',
   'Manajer',
   'Supervisor',
@@ -37,15 +42,14 @@ const JABATAN_OPTIONS: JabatanType[] = [
 
 export const AbsensiForm: React.FC<AbsensiFormProps> = ({
   onSuccess,
-  supabaseConfigured,
-  onOpenSettings,
+  session,
+  onBackToIndex,
+  standalone = false,
 }) => {
   const [nama, setNama] = useState('');
-  const [jabatan, setJabatan] = useState<JabatanType | ''>('');
+  const [jabatan, setJabatan] = useState<string>('');
   const [customJabatan, setCustomJabatan] = useState('');
-  const [status, setStatus] = useState<AbsensiRecord['status']>('Hadir');
   const [signatureData, setSignatureData] = useState<string | null>(null);
-  const [keterangan, setKeterangan] = useState('');
 
   // Live clock
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -54,6 +58,7 @@ export const AbsensiForm: React.FC<AbsensiFormProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successData, setSuccessData] = useState<{ record: AbsensiRecord; source: 'supabase' | 'local' } | null>(null);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
   // Key to force reset SignaturePad
   const [signaturePadKey, setSignaturePadKey] = useState(0);
@@ -76,9 +81,50 @@ export const AbsensiForm: React.FC<AbsensiFormProps> = ({
     second: '2-digit',
   });
 
+  // Calculate options
+  const jabatanOptions = useMemo(() => {
+    if (session?.daftar_jabatan && session.daftar_jabatan.length > 0) {
+      const list = [...session.daftar_jabatan];
+      if (!list.includes('Lainnya')) {
+        list.push('Lainnya');
+      }
+      return list;
+    }
+    return DEFAULT_JABATAN_OPTIONS;
+  }, [session]);
+
+  // Check deadline
+  const isExpired = useMemo(() => {
+    if (!session?.batas_waktu) return false;
+    const deadline = new Date(session.batas_waktu).getTime();
+    return currentTime.getTime() > deadline;
+  }, [session, currentTime]);
+
+  const formattedDeadline = useMemo(() => {
+    if (!session?.batas_waktu) return null;
+    try {
+      const d = new Date(session.batas_waktu);
+      return d.toLocaleDateString('id-ID', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return session.batas_waktu;
+    }
+  }, [session]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+
+    if (isExpired) {
+      setErrorMessage('Batas waktu absensi untuk kegiatan ini telah berakhir.');
+      return;
+    }
 
     // Validation
     const trimmedNama = nama.trim();
@@ -109,9 +155,10 @@ export const AbsensiForm: React.FC<AbsensiFormProps> = ({
       const result = await submitAbsensiToDatabase({
         nama: trimmedNama,
         jabatan: finalJabatan,
-        status,
+        status: 'Hadir',
         signature_data: signatureData,
-        keterangan: keterangan.trim() || undefined,
+        session_id: session?.id,
+        judul_kegiatan: session?.judul_kegiatan,
         waktu_absen: currentTime.toISOString(),
       });
 
@@ -135,9 +182,7 @@ export const AbsensiForm: React.FC<AbsensiFormProps> = ({
         setNama('');
         setJabatan('');
         setCustomJabatan('');
-        setStatus('Hadir');
         setSignatureData(null);
-        setKeterangan('');
         setSignaturePadKey((prev) => prev + 1);
       } else {
         setErrorMessage(result.error || 'Terjadi kesalahan saat menyimpan absensi.');
@@ -155,37 +200,84 @@ export const AbsensiForm: React.FC<AbsensiFormProps> = ({
     setNama('');
     setJabatan('');
     setCustomJabatan('');
-    setStatus('Hadir');
     setSignatureData(null);
-    setKeterangan('');
     setSignaturePadKey((prev) => prev + 1);
   };
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-5 sm:p-7">
-      {/* Live Time Badge Header */}
+      {/* Live Time Badge & Event Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 pb-5 mb-6 border-b border-slate-100">
         <div>
+          {onBackToIndex && (
+            <button
+              type="button"
+              onClick={onBackToIndex}
+              className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-1 mb-1.5 cursor-pointer"
+            >
+              ← Kembali ke Index Kegiatan
+            </button>
+          )}
           <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-            <span>Formulir Presensi Kehadiran</span>
+            <span>{session?.judul_kegiatan || 'Formulir Presensi Kehadiran'}</span>
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
             Lengkapi data dan bubuhkan tanda tangan digital Anda di bawah ini
           </p>
         </div>
 
-        <div className="flex items-center gap-3 bg-slate-50 px-3.5 py-1.5 rounded-xl border border-slate-200 text-xs text-slate-700 font-medium">
-          <span className="flex items-center gap-1.5 text-slate-600">
-            <Calendar className="w-3.5 h-3.5 text-indigo-600" />
-            {formattedDate}
-          </span>
-          <span className="w-1 h-1 rounded-full bg-slate-300" />
-          <span className="flex items-center gap-1.5 text-indigo-700 font-mono font-semibold">
-            <Clock className="w-3.5 h-3.5 text-indigo-600" />
-            {formattedTime} WIB
-          </span>
+        <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
+          {session && (
+            <button
+              type="button"
+              onClick={() => setIsShareModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-semibold transition-colors cursor-pointer"
+              title="Bagikan formulir atau tampilkan QR Code"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              <span>Bagikan Form</span>
+            </button>
+          )}
+
+          {formattedDeadline && (
+            <div
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-medium ${
+                isExpired
+                  ? 'bg-rose-50 border-rose-200 text-rose-700 font-semibold'
+                  : 'bg-amber-50 border-amber-200 text-amber-800'
+              }`}
+            >
+              <Timer className="w-3.5 h-3.5 shrink-0" />
+              <span>Batas Waktu: {formattedDeadline}</span>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2.5 bg-slate-50 px-3.5 py-1.5 rounded-xl border border-slate-200 text-xs text-slate-700 font-medium">
+            <span className="flex items-center gap-1.5 text-slate-600">
+              <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+              {formattedDate}
+            </span>
+            <span className="w-1 h-1 rounded-full bg-slate-300" />
+            <span className="flex items-center gap-1.5 text-indigo-700 font-mono font-semibold">
+              <Clock className="w-3.5 h-3.5 text-indigo-600" />
+              {formattedTime} WIB
+            </span>
+          </div>
         </div>
       </div>
+
+      {/* Expired Warning Banner */}
+      {isExpired && (
+        <div className="mb-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold text-rose-900 text-sm">Batas Waktu Absensi Telah Berakhir</p>
+            <p className="mt-0.5 text-rose-700">
+              Sesi absensi untuk kegiatan ini telah ditutup pada {formattedDeadline}. Formulir tidak dapat menerima absensi baru.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Success Notification Alert */}
       {successData && (
@@ -199,23 +291,14 @@ export const AbsensiForm: React.FC<AbsensiFormProps> = ({
                 Presensi Berhasil Dicatat!
               </p>
               <p className="text-xs text-emerald-700 mt-0.5">
-                Terima kasih, <strong>{successData.record.nama}</strong> ({successData.record.jabatan}).{' '}
-                {successData.source === 'supabase' ? (
-                  <span className="inline-flex items-center gap-1 text-emerald-800 font-medium">
-                    Tersimpan di Supabase Cloud.
-                  </span>
-                ) : (
-                  <span className="text-amber-800 font-medium">
-                    Tersimpan di Penyimpanan Lokal (Sambungkan Supabase untuk cloud).
-                  </span>
-                )}
+                Terima kasih, data kehadiran atas nama <strong>{successData.record.nama}</strong> ({successData.record.jabatan}) telah berhasil tersimpan.
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={handleResetForm}
-            className="text-xs font-semibold px-3 py-1.5 bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg transition-colors shadow-2xs whitespace-nowrap self-end sm:self-auto"
+            className="text-xs font-semibold px-3 py-1.5 bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg transition-colors shadow-2xs whitespace-nowrap self-end sm:self-auto cursor-pointer"
           >
             Isi Absensi Baru
           </button>
@@ -232,7 +315,7 @@ export const AbsensiForm: React.FC<AbsensiFormProps> = ({
           <button
             type="button"
             onClick={() => setErrorMessage(null)}
-            className="text-rose-600 font-semibold hover:underline"
+            className="text-rose-600 font-semibold hover:underline cursor-pointer"
           >
             Tutup
           </button>
@@ -254,10 +337,11 @@ export const AbsensiForm: React.FC<AbsensiFormProps> = ({
             id="input-nama"
             type="text"
             required
+            disabled={isExpired}
             value={nama}
             onChange={(e) => setNama(e.target.value)}
             placeholder="Contoh: Budi Santoso, S.Kom"
-            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200/50 outline-none text-sm text-slate-800 placeholder:text-slate-400 transition-all bg-white"
+            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200/50 outline-none text-sm text-slate-800 placeholder:text-slate-400 transition-all bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
           />
         </div>
 
@@ -275,14 +359,15 @@ export const AbsensiForm: React.FC<AbsensiFormProps> = ({
             <select
               id="select-jabatan"
               required
+              disabled={isExpired}
               value={jabatan}
-              onChange={(e) => setJabatan(e.target.value as JabatanType)}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200/50 outline-none text-sm text-slate-800 transition-all bg-white appearance-none cursor-pointer pr-10"
+              onChange={(e) => setJabatan(e.target.value)}
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200/50 outline-none text-sm text-slate-800 transition-all bg-white appearance-none cursor-pointer pr-10 disabled:bg-slate-100 disabled:cursor-not-allowed"
             >
               <option value="" disabled>
                 -- Pilih Jabatan / Posisi --
               </option>
-              {JABATAN_OPTIONS.map((job) => (
+              {jabatanOptions.map((job) => (
                 <option key={job} value={job}>
                   {job}
                 </option>
@@ -302,36 +387,14 @@ export const AbsensiForm: React.FC<AbsensiFormProps> = ({
                 id="input-custom-jabatan"
                 type="text"
                 required
+                disabled={isExpired}
                 value={customJabatan}
                 onChange={(e) => setCustomJabatan(e.target.value)}
                 placeholder="Tuliskan jabatan Anda secara spesifik..."
-                className="w-full px-3.5 py-2 rounded-xl border border-indigo-200 bg-indigo-50/30 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200/50 outline-none text-sm text-slate-800 placeholder:text-slate-400"
+                className="w-full px-3.5 py-2 rounded-xl border border-indigo-200 bg-indigo-50/30 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200/50 outline-none text-sm text-slate-800 placeholder:text-slate-400 disabled:bg-slate-100 disabled:cursor-not-allowed"
               />
             </div>
           )}
-        </div>
-
-        {/* Status Presensi Pills */}
-        <div>
-          <label className="block text-sm font-semibold text-slate-800 mb-2">
-            Status Presensi
-          </label>
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-            {(['Hadir', 'Dinas', 'Tugas Luar', 'Izin', 'Sakit'] as const).map((st) => (
-              <button
-                type="button"
-                key={st}
-                onClick={() => setStatus(st)}
-                className={`py-2 px-3 text-xs font-semibold rounded-xl border transition-all text-center ${
-                  status === st
-                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
-                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                {st}
-              </button>
-            ))}
-          </div>
         </div>
 
         {/* Signature Pad */}
@@ -341,56 +404,12 @@ export const AbsensiForm: React.FC<AbsensiFormProps> = ({
           required={true}
         />
 
-        {/* Keterangan / Keperluan Tambahan */}
-        <div>
-          <label
-            htmlFor="input-keterangan"
-            className="block text-sm font-semibold text-slate-800 mb-1.5 flex items-center gap-1.5"
-          >
-            <FileText className="w-4 h-4 text-slate-500" />
-            <span>Keterangan / Keperluan (Opsional)</span>
-          </label>
-          <textarea
-            id="input-keterangan"
-            rows={2}
-            value={keterangan}
-            onChange={(e) => setKeterangan(e.target.value)}
-            placeholder="Contoh: Menghadiri rapat koordinasi mingguan, dinas proyek A, dll."
-            className="w-full px-3.5 py-2 rounded-xl border border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200/50 outline-none text-sm text-slate-800 placeholder:text-slate-400 transition-all resize-none"
-          />
-        </div>
-
-        {/* Database target indicator */}
-        <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between text-xs">
-          <div className="flex items-center gap-2">
-            <span
-              className={`w-2.5 h-2.5 rounded-full ${
-                supabaseConfigured ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'
-              }`}
-            />
-            <span className="text-slate-600">
-              Penyimpanan:{' '}
-              <strong className={supabaseConfigured ? 'text-emerald-700' : 'text-amber-700'}>
-                {supabaseConfigured ? 'Supabase Database Cloud' : 'Lokal (Supabase Belum Diatur)'}
-              </strong>
-            </span>
-          </div>
-
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className="text-indigo-600 hover:text-indigo-800 font-medium hover:underline text-xs"
-          >
-            {supabaseConfigured ? 'Konfigurasi' : 'Setup Supabase'}
-          </button>
-        </div>
-
         {/* Form Action Buttons */}
         <div className="pt-2 flex flex-col sm:flex-row gap-3">
           <button
             type="submit"
             id="btn-submit-absensi"
-            disabled={isSubmitting}
+            disabled={isSubmitting || isExpired}
             className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-semibold text-sm shadow-xs hover:shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
             {isSubmitting ? (
@@ -416,6 +435,11 @@ export const AbsensiForm: React.FC<AbsensiFormProps> = ({
                 </svg>
                 <span>Menyimpan Presensi...</span>
               </>
+            ) : isExpired ? (
+              <>
+                <AlertCircle className="w-4 h-4" />
+                <span>Absensi Ditutup (Waktu Habis)</span>
+              </>
             ) : (
               <>
                 <Send className="w-4 h-4" />
@@ -429,13 +453,22 @@ export const AbsensiForm: React.FC<AbsensiFormProps> = ({
             id="btn-reset-form"
             onClick={handleResetForm}
             disabled={isSubmitting}
-            className="px-4 py-3 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold transition-colors flex items-center justify-center gap-1.5"
+            className="px-4 py-3 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40"
           >
             <RotateCcw className="w-4 h-4 text-slate-500" />
             <span>Reset</span>
           </button>
         </div>
       </form>
+
+      {/* Share Modal */}
+      {session && (
+        <ShareModal
+          session={session}
+          isOpen={isShareModalOpen}
+          onClose={() => setIsShareModalOpen(false)}
+        />
+      )}
     </div>
   );
 };

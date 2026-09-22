@@ -45,22 +45,6 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
       ctx.save();
       ctx.scale(dpr, dpr);
 
-      // Draw subtle signature line guide
-      const lineY = rect.height - 36;
-      ctx.beginPath();
-      ctx.strokeStyle = '#cbd5e1'; // slate-300
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.moveTo(24, lineY);
-      ctx.lineTo(rect.width - 24, lineY);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Draw helper text
-      ctx.font = '11px sans-serif';
-      ctx.fillStyle = '#94a3b8';
-      ctx.fillText('Tanda Tangan di Sini', 26, lineY + 16);
-
       // Set stroke style for user drawing
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';

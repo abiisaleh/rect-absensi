@@ -1,30 +1,72 @@
 @import "tailwindcss";
 
+@page {
+  size: A4 portrait;
+  margin: 10mm 12mm;
+}
+
 @media print {
   header,
   footer,
+  nav,
   button,
+  .print\\:hidden,
   .no-print,
   #btn-status-supabase,
   #btn-open-settings,
-  .border-b.border-slate-200.bg-slate-50 {
+  #btn-print-pdf-trigger {
     display: none !important;
   }
 
   body {
-    background-color: white !important;
-    color: black !important;
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
 
   main {
     max-width: 100% !important;
     padding: 0 !important;
     margin: 0 !important;
+    width: 100% !important;
+  }
+
+  #printable-daftar-hadir-area {
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
   }
 
   .shadow-sm,
   .shadow-xs,
-  .shadow-2xs {
+  .shadow-2xs,
+  .shadow-md,
+  .shadow-lg,
+  .shadow-xl,
+  .shadow-2xl {
     box-shadow: none !important;
+  }
+
+  table {
+    page-break-inside: auto;
+  }
+
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tfoot {
+    display: table-footer-group;
   }
 }

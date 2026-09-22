@@ -1,8 +1,9 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { AbsensiRecord } from '../types';
+import { AbsensiRecord, KegiatanSession } from '../types';
 
 const STORAGE_CONFIG_KEY = 'absensi_supabase_config';
 const LOCAL_STORAGE_RECORDS_KEY = 'absensi_records_cache';
+const LOCAL_STORAGE_SESSIONS_KEY = 'absensi_sessions_cache';
 
 export interface SupabaseSettings {
   url: string;
@@ -71,6 +72,36 @@ export function getSupabaseClient(): SupabaseClient | null {
   return supabaseInstance;
 }
 
+// Session storage helpers
+export function getLocalSessions(): KegiatanSession[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_SESSIONS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalSession(session: KegiatanSession): void {
+  try {
+    const list = getLocalSessions();
+    const existingIdx = list.findIndex((s) => s.id === session.id);
+    if (existingIdx >= 0) {
+      list[existingIdx] = session;
+    } else {
+      list.unshift(session);
+    }
+    localStorage.setItem(LOCAL_STORAGE_SESSIONS_KEY, JSON.stringify(list));
+  } catch (err) {
+    console.error('Failed to save session to local storage:', err);
+  }
+}
+
+export function getSessionById(id: string): KegiatanSession | null {
+  const list = getLocalSessions();
+  return list.find((s) => s.id === id) || null;
+}
+
 export const SUPABASE_SQL_SCHEMA = `-- Jalankan SQL ini di menu "SQL Editor" pada dashboard Supabase Anda
 -- (Klik "New Query", paste kode ini, lalu klik "Run")
 
@@ -82,6 +113,8 @@ CREATE TABLE IF NOT EXISTS absensi (
   status TEXT DEFAULT 'Hadir' NOT NULL,
   signature_data TEXT NOT NULL,
   keterangan TEXT,
+  session_id TEXT,
+  judul_kegiatan TEXT,
   waktu_absen TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
@@ -191,6 +224,8 @@ export async function submitAbsensiToDatabase(
             status: record.status,
             signature_data: record.signature_data,
             keterangan: record.keterangan || null,
+            session_id: record.session_id || null,
+            judul_kegiatan: record.judul_kegiatan || null,
             waktu_absen: record.waktu_absen || now,
           },
         ])
@@ -216,6 +251,8 @@ export async function submitAbsensiToDatabase(
         status: data.status,
         signature_data: data.signature_data,
         keterangan: data.keterangan || '',
+        session_id: data.session_id || record.session_id,
+        judul_kegiatan: data.judul_kegiatan || record.judul_kegiatan,
         waktu_absen: data.waktu_absen,
         created_at: data.created_at,
         synced_to_supabase: true,
@@ -253,7 +290,7 @@ export async function submitAbsensiToDatabase(
 }
 
 // Fetch records from Supabase, or fall back to local
-export async function fetchAbsensiRecords(): Promise<{
+export async function fetchAbsensiRecords(sessionId?: string): Promise<{
   data: AbsensiRecord[];
   source: 'supabase' | 'local';
   error?: string;
@@ -261,10 +298,11 @@ export async function fetchAbsensiRecords(): Promise<{
   const client = getSupabaseClient();
   if (client) {
     try {
-      const { data, error } = await client
-        .from('absensi')
-        .select('*')
-        .order('waktu_absen', { ascending: false });
+      let query = client.from('absensi').select('*');
+      if (sessionId) {
+        query = query.eq('session_id', sessionId);
+      }
+      const { data, error } = await query.order('waktu_absen', { ascending: false });
 
       if (!error && data) {
         const mapped: AbsensiRecord[] = data.map((item: any) => ({
@@ -274,6 +312,8 @@ export async function fetchAbsensiRecords(): Promise<{
           status: item.status || 'Hadir',
           signature_data: item.signature_data,
           keterangan: item.keterangan || '',
+          session_id: item.session_id,
+          judul_kegiatan: item.judul_kegiatan,
           waktu_absen: item.waktu_absen,
           created_at: item.created_at,
           synced_to_supabase: true,
@@ -285,8 +325,10 @@ export async function fetchAbsensiRecords(): Promise<{
     }
   }
 
+  const allLocal = getLocalAbsensi();
+  const filtered = sessionId ? allLocal.filter((r) => r.session_id === sessionId) : allLocal;
   return {
-    data: getLocalAbsensi(),
+    data: filtered,
     source: 'local',
   };
 }

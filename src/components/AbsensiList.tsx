@@ -13,6 +13,8 @@ import {
   X,
   Database,
   Cloud,
+  Layers,
+  FileText,
 } from 'lucide-react';
 import { AbsensiRecord } from '../types';
 
@@ -21,6 +23,9 @@ interface AbsensiListProps {
   isLoading: boolean;
   onRefresh: () => void;
   source: 'supabase' | 'local';
+  currentKegiatanJudul?: string;
+  onClearKegiatanFilter?: () => void;
+  onOpenPrintView?: (recordsToPrint: AbsensiRecord[], kegiatanJudul?: string) => void;
 }
 
 export const AbsensiList: React.FC<AbsensiListProps> = ({
@@ -28,23 +33,32 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
   isLoading,
   onRefresh,
   source,
+  currentKegiatanJudul,
+  onClearKegiatanFilter,
+  onOpenPrintView,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterJabatan, setFilterJabatan] = useState('ALL');
-  const [filterStatus, setFilterStatus] = useState('ALL');
+  const [filterKegiatan, setFilterKegiatan] = useState(currentKegiatanJudul || 'ALL');
   const [selectedRecord, setSelectedRecord] = useState<AbsensiRecord | null>(null);
+
+  // Unique list of kegiatan from records
+  const uniqueKegiatan = Array.from(
+    new Set(records.map((r) => r.judul_kegiatan).filter(Boolean))
+  ) as string[];
 
   // Filter records
   const filteredRecords = records.filter((rec) => {
     const matchesSearch =
       rec.nama.toLowerCase().includes(searchTerm.toLowerCase()) ||
       rec.jabatan.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (rec.keterangan && rec.keterangan.toLowerCase().includes(searchTerm.toLowerCase()));
+      (rec.judul_kegiatan && rec.judul_kegiatan.toLowerCase().includes(searchTerm.toLowerCase()));
 
     const matchesJabatan = filterJabatan === 'ALL' || rec.jabatan === filterJabatan;
-    const matchesStatus = filterStatus === 'ALL' || rec.status === filterStatus;
+    const matchesKegiatan =
+      filterKegiatan === 'ALL' || rec.judul_kegiatan === filterKegiatan;
 
-    return matchesSearch && matchesJabatan && matchesStatus;
+    return matchesSearch && matchesJabatan && matchesKegiatan;
   });
 
   // Unique list of jabatans from records
@@ -54,16 +68,16 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
   const exportToCSV = () => {
     if (records.length === 0) return;
 
-    const headers = ['No', 'Waktu Absen', 'Nama Lengkap', 'Jabatan', 'Status', 'Keterangan'];
+    const headers = ['No', 'Waktu Absen', 'Kegiatan', 'Nama Lengkap', 'Jabatan', 'Status'];
     const rows = filteredRecords.map((r, index) => {
       const date = new Date(r.waktu_absen).toLocaleString('id-ID');
       return [
         index + 1,
         `"${date}"`,
+        `"${r.judul_kegiatan || '-'}"`,
         `"${r.nama.replace(/"/g, '""')}"`,
         `"${r.jabatan.replace(/"/g, '""')}"`,
         `"${r.status}"`,
-        `"${(r.keterangan || '').replace(/"/g, '""')}"`,
       ].join(',');
     });
 
@@ -71,21 +85,31 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `rekap-absensi-${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute(
+      'download',
+      `rekap_absensi_${new Date().toISOString().slice(0, 10)}.csv`
+    );
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
   const handlePrint = () => {
-    window.print();
+    if (onOpenPrintView) {
+      onOpenPrintView(
+        filteredRecords,
+        filterKegiatan !== 'ALL' ? filterKegiatan : undefined
+      );
+    } else {
+      window.print();
+    }
   };
 
   const formatDate = (isoString: string) => {
     try {
       const date = new Date(isoString);
       return date.toLocaleDateString('id-ID', {
-        day: '2-digit',
+        day: 'numeric',
         month: 'short',
         year: 'numeric',
       });
@@ -97,29 +121,14 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
   const formatTime = (isoString: string) => {
     try {
       const date = new Date(isoString);
-      return date.toLocaleTimeString('id-ID', {
-        hour: '2-digit',
-        minute: '2-digit',
-      }) + ' WIB';
+      return (
+        date.toLocaleTimeString('id-ID', {
+          hour: '2-digit',
+          minute: '2-digit',
+        }) + ' WIB'
+      );
     } catch {
       return '';
-    }
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'Hadir':
-        return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-      case 'Dinas':
-        return 'bg-blue-50 text-blue-700 border-blue-200';
-      case 'Tugas Luar':
-        return 'bg-indigo-50 text-indigo-700 border-indigo-200';
-      case 'Izin':
-        return 'bg-amber-50 text-amber-700 border-amber-200';
-      case 'Sakit':
-        return 'bg-rose-50 text-rose-700 border-rose-200';
-      default:
-        return 'bg-slate-50 text-slate-700 border-slate-200';
     }
   };
 
@@ -130,7 +139,7 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
         <div>
           <div className="flex items-center gap-2">
             <h2 className="text-xl font-bold text-slate-900 tracking-tight">
-              Riwayat Presensi
+              Rekapitulasi Kehadiran
             </h2>
             <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-semibold">
               {filteredRecords.length} Data
@@ -155,7 +164,7 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
             type="button"
             onClick={onRefresh}
             disabled={isLoading}
-            className="p-2 text-slate-600 hover:text-indigo-600 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors"
+            className="p-2 text-slate-600 hover:text-indigo-600 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
             title="Refresh Data"
           >
             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-indigo-600' : ''}`} />
@@ -165,7 +174,8 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
             type="button"
             onClick={exportToCSV}
             disabled={records.length === 0}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors disabled:opacity-40 cursor-pointer"
+            title="Download CSV"
           >
             <Download className="w-3.5 h-3.5" />
             <span>Ekspor CSV</span>
@@ -173,34 +183,36 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
 
           <button
             type="button"
+            id="btn-print-daftar-hadir"
             onClick={handlePrint}
-            disabled={records.length === 0}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-xl border border-indigo-200 transition-colors disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white shadow-xs transition-colors cursor-pointer"
+            title="Cetak format Daftar Hadir resmi seperti dokumen dinas"
           >
             <Printer className="w-3.5 h-3.5" />
-            <span>Cetak / PDF</span>
+            <span>Cetak PDF Daftar Hadir</span>
           </button>
         </div>
       </div>
 
-      {/* Filter & Search Bar */}
-      <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+      {/* Filter Bar */}
+      <div className="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
         {/* Search */}
         <div className="relative">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
           <input
             type="text"
-            placeholder="Cari nama, jabatan..."
+            placeholder="Cari nama, jabatan, atau kegiatan..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200/50 outline-none text-slate-800 placeholder:text-slate-400"
+            className="w-full pl-9 pr-8 py-2 text-xs rounded-xl border border-slate-200 focus:border-indigo-500 outline-none text-slate-800 bg-white"
           />
           {searchTerm && (
             <button
+              type="button"
               onClick={() => setSearchTerm('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
+              className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
             >
-              ×
+              <X className="w-3.5 h-3.5" />
             </button>
           )}
         </div>
@@ -210,7 +222,7 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
           <select
             value={filterJabatan}
             onChange={(e) => setFilterJabatan(e.target.value)}
-            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-indigo-500 outline-none text-slate-700 bg-white"
+            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-indigo-500 outline-none text-slate-700 bg-white cursor-pointer"
           >
             <option value="ALL">Semua Jabatan ({uniqueJabatans.length})</option>
             {uniqueJabatans.map((j) => (
@@ -221,19 +233,19 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
           </select>
         </div>
 
-        {/* Status Filter */}
+        {/* Kegiatan Filter */}
         <div>
           <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-indigo-500 outline-none text-slate-700 bg-white"
+            value={filterKegiatan}
+            onChange={(e) => setFilterKegiatan(e.target.value)}
+            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-indigo-500 outline-none text-slate-700 bg-white cursor-pointer"
           >
-            <option value="ALL">Semua Status</option>
-            <option value="Hadir">Hadir</option>
-            <option value="Dinas">Dinas</option>
-            <option value="Tugas Luar">Tugas Luar</option>
-            <option value="Izin">Izin</option>
-            <option value="Sakit">Sakit</option>
+            <option value="ALL">Semua Kegiatan ({uniqueKegiatan.length})</option>
+            {uniqueKegiatan.map((k) => (
+              <option key={k} value={k}>
+                {k}
+              </option>
+            ))}
           </select>
         </div>
       </div>
@@ -250,7 +262,7 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
             <User className="w-10 h-10 text-slate-300 mx-auto mb-2" />
             <p className="text-sm font-semibold text-slate-700">Belum Ada Catatan Kehadiran</p>
             <p className="text-xs text-slate-400 max-w-sm mx-auto mt-1">
-              Silakan isi formulir di samping untuk mencatat kehadiran baru lengkap dengan tanda tangan.
+              Data presensi yang dikirim melalui formulir akan tercatat di sini secara otomatis.
             </p>
           </div>
         ) : (
@@ -259,9 +271,8 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
               <thead className="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200 uppercase tracking-wider">
                 <tr>
                   <th className="py-3 px-4">Nama & Jabatan</th>
+                  <th className="py-3 px-4">Kegiatan</th>
                   <th className="py-3 px-4">Waktu Presensi</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Keterangan</th>
                   <th className="py-3 px-4 text-center">Tanda Tangan</th>
                   <th className="py-3 px-4 text-center">Aksi</th>
                 </tr>
@@ -277,19 +288,16 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
                       </div>
                     </td>
 
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      <div className="text-slate-800 font-medium">{formatDate(item.waktu_absen)}</div>
-                      <div className="text-slate-500 text-[11px] font-mono">{formatTime(item.waktu_absen)}</div>
-                    </td>
-
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold border ${getStatusBadge(item.status)}`}>
-                        {item.status}
+                    <td className="py-3 px-4 text-slate-700">
+                      <span className="inline-flex items-center gap-1 font-medium text-indigo-900 bg-indigo-50 px-2 py-0.5 rounded text-[11px]">
+                        <Layers className="w-3 h-3 text-indigo-500 shrink-0" />
+                        <span>{item.judul_kegiatan || 'Umum'}</span>
                       </span>
                     </td>
 
-                    <td className="py-3 px-4 text-slate-600 max-w-xs truncate">
-                      {item.keterangan || <span className="text-slate-300 italic">-</span>}
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      <div className="text-slate-800 font-medium">{formatDate(item.waktu_absen)}</div>
+                      <div className="text-slate-500 text-[11px] font-mono">{formatTime(item.waktu_absen)}</div>
                     </td>
 
                     <td className="py-3 px-4 text-center">
@@ -319,7 +327,7 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
                       <button
                         type="button"
                         onClick={() => setSelectedRecord(item)}
-                        className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg text-slate-700 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 font-medium transition-colors"
+                        className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg text-slate-700 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 font-medium transition-colors cursor-pointer"
                       >
                         <Eye className="w-3.5 h-3.5" />
                         <span>Detail</span>
@@ -333,24 +341,22 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
         )}
       </div>
 
-      {/* Signature & Record Detail Modal */}
+      {/* Detail Modal */}
       {selectedRecord && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 animate-in zoom-in-95 duration-200">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-              <h3 className="text-lg font-bold text-slate-900">
-                Bukti Kehadiran Digital
-              </h3>
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="font-bold text-slate-900 text-base">Detail Presensi</h3>
               <button
                 type="button"
                 onClick={() => setSelectedRecord(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+                className="text-slate-400 hover:text-slate-600 p-1 rounded cursor-pointer"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="py-4 space-y-3 text-sm">
+            <div className="space-y-2.5 text-xs text-slate-700">
               <div className="flex justify-between py-1 border-b border-slate-50">
                 <span className="text-slate-500">Nama Lengkap:</span>
                 <span className="font-semibold text-slate-900">{selectedRecord.nama}</span>
@@ -360,10 +366,8 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
                 <span className="font-semibold text-slate-900">{selectedRecord.jabatan}</span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-50">
-                <span className="text-slate-500">Status:</span>
-                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${getStatusBadge(selectedRecord.status)}`}>
-                  {selectedRecord.status}
-                </span>
+                <span className="text-slate-500">Kegiatan:</span>
+                <span className="font-semibold text-indigo-700">{selectedRecord.judul_kegiatan || 'Umum'}</span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-50">
                 <span className="text-slate-500">Waktu Presensi:</span>
@@ -371,14 +375,6 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
                   {new Date(selectedRecord.waktu_absen).toLocaleString('id-ID')}
                 </span>
               </div>
-              {selectedRecord.keterangan && (
-                <div className="py-1 border-b border-slate-50">
-                  <span className="text-slate-500 block mb-1">Keterangan:</span>
-                  <p className="text-xs text-slate-700 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-                    {selectedRecord.keterangan}
-                  </p>
-                </div>
-              )}
 
               {/* Digital Signature Inspection */}
               <div className="pt-2">
@@ -409,7 +405,7 @@ export const AbsensiList: React.FC<AbsensiListProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedRecord(null)}
-                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-xl transition-colors"
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
               >
                 Tutup
               </button>

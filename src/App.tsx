@@ -3,34 +3,137 @@ import {
   ClipboardCheck,
   ListOrdered,
   Settings,
-  Database,
-  Cloud,
-  CheckCircle2,
-  Users,
-  CalendarCheck,
-  Building2,
-  HelpCircle,
-  ExternalLink,
-  ShieldAlert,
+  Calendar,
+  Layers,
+  Printer,
+  Share2,
+  ArrowLeft,
 } from 'lucide-react';
 import { AbsensiForm } from './components/AbsensiForm';
 import { AbsensiList } from './components/AbsensiList';
+import { KegiatanIndex } from './components/KegiatanIndex';
+import { DaftarHadirPrintView } from './components/DaftarHadirPrintView';
 import { SupabaseConfigModal } from './components/SupabaseConfigModal';
 import {
   fetchAbsensiRecords,
   getStoredSupabaseConfig,
   testSupabaseConnection,
+  getLocalSessions,
+  saveLocalSession,
 } from './lib/supabase';
-import { AbsensiRecord } from './types';
+import { AbsensiRecord, KegiatanSession } from './types';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'form' | 'riwayat'>('form');
+  const [currentPage, setCurrentPage] = useState<'index' | 'form' | 'rekap' | 'print'>('index');
+  const [sessions, setSessions] = useState<KegiatanSession[]>([]);
+  const [selectedSession, setSelectedSession] = useState<KegiatanSession | null>(null);
   const [records, setRecords] = useState<AbsensiRecord[]>([]);
   const [dataSource, setDataSource] = useState<'supabase' | 'local'>('local');
   const [isLoading, setIsLoading] = useState(false);
   const [supabaseConfigured, setSupabaseConfigured] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [connectionNotice, setConnectionNotice] = useState<string | null>(null);
+
+  // Sync state from URL query parameters
+  const syncFromUrl = useCallback((allSessions: KegiatanSession[]) => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const pageParam = params.get('page');
+      const sessionParam = params.get('session');
+
+      let currentSession: KegiatanSession | null = null;
+      if (sessionParam) {
+        currentSession = allSessions.find((s) => s.id === sessionParam) || null;
+      }
+      if (!currentSession && allSessions.length > 0) {
+        currentSession = allSessions[0];
+      }
+      setSelectedSession(currentSession);
+
+      if (pageParam === 'form') {
+        setCurrentPage('form');
+      } else if (pageParam === 'print') {
+        setCurrentPage('print');
+      } else if (pageParam === 'rekap') {
+        setCurrentPage('rekap');
+      } else {
+        setCurrentPage('index');
+      }
+    } catch {
+      setCurrentPage('index');
+    }
+  }, []);
+
+  // Update URL query parameters
+  const navigateTo = (page: 'index' | 'form' | 'rekap' | 'print', session?: KegiatanSession | null) => {
+    setCurrentPage(page);
+    const targetSession = session !== undefined ? session : selectedSession;
+    if (session !== undefined) {
+      setSelectedSession(session);
+    }
+
+    try {
+      const url = new URL(window.location.href);
+      if (page === 'index') {
+        url.searchParams.delete('page');
+        url.searchParams.delete('session');
+      } else {
+        url.searchParams.set('page', page);
+        if (targetSession) {
+          url.searchParams.set('session', targetSession.id);
+        } else {
+          url.searchParams.delete('session');
+        }
+      }
+      window.history.pushState({}, '', url.toString());
+    } catch {
+      // Ignore URL history errors in sandboxed iframes
+    }
+  };
+
+  // Load sessions from local storage
+  const loadSessions = useCallback(() => {
+    let list = getLocalSessions();
+    if (list.length === 0) {
+      // Create initial starter session matching official format
+      const now = new Date();
+      now.setHours(23, 59, 0, 0);
+      const starter: KegiatanSession = {
+        id: 'session-kpu-deiyai',
+        judul_kegiatan: 'Rapat Pleno Koordinasi dan Evaluasi',
+        batas_waktu: now.toISOString(),
+        instansi: 'KOMISI PEMILIHAN UMUM',
+        sub_instansi: 'KABUPATEN DEIYAI',
+        tempat: 'AULA KANTOR KPU DEIYAI',
+        alamat: 'Jalan Utama Waghete, Kab. Deiyai, Prov. Papua Tengah',
+        hari_tanggal: now
+          .toLocaleDateString('id-ID', {
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric',
+          })
+          .toUpperCase(),
+        pukul: '08.30 WIT – SELESAI',
+        daftar_jabatan: [
+          'Ketua',
+          'Anggota',
+          'Sekretaris',
+          'Kasubag Rendatin',
+          'Kasubag KUL',
+          'Kasubag SDM',
+          'Kasubag Teknis',
+          'Staf',
+          'Lainnya',
+        ],
+        created_at: new Date().toISOString(),
+      };
+      saveLocalSession(starter);
+      list = [starter];
+    }
+    setSessions(list);
+    return list;
+  }, []);
 
   // Load configuration & test connection
   const checkSupabaseStatus = useCallback(async () => {
@@ -67,7 +170,47 @@ export default function App() {
   useEffect(() => {
     checkSupabaseStatus();
     loadRecords();
-  }, [checkSupabaseStatus, loadRecords]);
+    const currentSessions = loadSessions();
+    syncFromUrl(currentSessions);
+
+    // Handle browser popstate (back/forward button)
+    const handlePopState = () => {
+      syncFromUrl(getLocalSessions());
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [checkSupabaseStatus, loadRecords, loadSessions, syncFromUrl]);
+
+  // Handle session selection from Index -> navigate to form page
+  const handleSelectSession = (session: KegiatanSession) => {
+    navigateTo('form', session);
+  };
+
+  // Handle print session directly from Index -> navigate to print page
+  const handlePrintSession = (session: KegiatanSession) => {
+    navigateTo('print', session);
+  };
+
+  // Handle new session created from Index
+  const handleCreateSession = (newSession: KegiatanSession) => {
+    saveLocalSession(newSession);
+    setSessions((prev) => [newSession, ...prev]);
+  };
+
+  // Handle delete session
+  const handleDeleteSession = (id: string) => {
+    try {
+      const updated = sessions.filter((s) => s.id !== id);
+      setSessions(updated);
+      localStorage.setItem('absensi_sessions_cache', JSON.stringify(updated));
+      if (selectedSession?.id === id) {
+        setSelectedSession(null);
+        navigateTo('index');
+      }
+    } catch {
+      // ignore
+    }
+  };
 
   // Handle new record submitted from AbsensiForm
   const handleRecordSuccess = (newRecord: AbsensiRecord, source: 'supabase' | 'local') => {
@@ -75,20 +218,104 @@ export default function App() {
     setDataSource(source);
   };
 
-  // Stats calculation
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const todayRecords = records.filter((r) => r.waktu_absen.startsWith(todayStr));
-  const hadirCount = todayRecords.filter((r) => r.status === 'Hadir').length;
-  const dinasCount = todayRecords.filter((r) => r.status === 'Dinas' || r.status === 'Tugas Luar').length;
-  const izinCount = todayRecords.filter((r) => r.status === 'Izin' || r.status === 'Sakit').length;
+  // Filter records for the current selected session (for print or focused rekap)
+  const sessionRecords = selectedSession
+    ? records.filter(
+        (r) =>
+          r.session_id === selectedSession.id ||
+          (r.judul_kegiatan &&
+            r.judul_kegiatan.toLowerCase() === selectedSession.judul_kegiatan.toLowerCase())
+      )
+    : records;
 
+  // Render Page: Dedicated Print PDF View
+  if (currentPage === 'print') {
+    return (
+      <DaftarHadirPrintView
+        session={selectedSession}
+        records={sessionRecords.length > 0 ? sessionRecords : records}
+        onBack={() => navigateTo('index')}
+      />
+    );
+  }
+
+  // Render Page: Dedicated Standalone Attendee Form
+  if (currentPage === 'form') {
+    return (
+      <div className="min-h-screen bg-slate-100/70 text-slate-800 antialiased font-sans flex flex-col">
+        {/* Simple Minimal Header for Form Page */}
+        <header className="bg-white border-b border-slate-200/80 sticky top-0 z-30 shadow-2xs">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => navigateTo('index')}
+              className="inline-flex items-center gap-2 text-xs sm:text-sm font-semibold text-slate-700 hover:text-indigo-600 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 text-slate-500" />
+              <span>Kembali ke Index Kegiatan</span>
+            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => navigateTo('rekap', selectedSession)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
+              >
+                <ListOrdered className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Lihat Rekap</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => navigateTo('print', selectedSession)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-colors cursor-pointer"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Cetak PDF</span>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {/* Standalone Form Page Body */}
+        <main className="flex-1 max-w-2xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
+          <AbsensiForm
+            onSuccess={handleRecordSuccess}
+            supabaseConfigured={supabaseConfigured && !connectionNotice}
+            onOpenSettings={() => setIsConfigModalOpen(true)}
+            session={selectedSession}
+            onBackToIndex={() => navigateTo('index')}
+            standalone={true}
+          />
+        </main>
+
+        <footer className="bg-white border-t border-slate-200/80 py-4 mt-auto">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
+            <p>© {new Date().getFullYear()} Form Absensi Online • Sistem Presensi Digital & Tanda Tangan</p>
+            <button
+              type="button"
+              onClick={() => navigateTo('index')}
+              className="hover:text-indigo-600 font-medium cursor-pointer"
+            >
+              Index Kegiatan
+            </button>
+          </div>
+        </footer>
+      </div>
+    );
+  }
+
+  // Render Page: Index or Rekap Page (Administrative & Management)
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-800 antialiased font-sans flex flex-col">
       {/* Top Navbar */}
       <header className="bg-white border-b border-slate-200/80 sticky top-0 z-30 shadow-2xs">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
           {/* Logo & Brand */}
-          <div className="flex items-center gap-3">
+          <div
+            onClick={() => navigateTo('index')}
+            className="flex items-center gap-3 cursor-pointer select-none"
+          >
             <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs">
               <ClipboardCheck className="w-5 h-5" />
             </div>
@@ -102,45 +329,28 @@ export default function App() {
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Presensi kehadiran karyawan & tamu terintegrasi Supabase
+                Presensi kehadiran kegiatan terintegrasi Supabase
               </p>
             </div>
           </div>
 
           {/* Header Action Buttons */}
           <div className="flex items-center gap-2">
-            {/* Status indicator button */}
             <button
               type="button"
-              id="btn-status-supabase"
-              onClick={() => setIsConfigModalOpen(true)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
-                supabaseConfigured && !connectionNotice
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                  : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
-              }`}
+              onClick={() => navigateTo('print', selectedSession)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
+              title="Cetak format Daftar Hadir resmi seperti gambar"
             >
-              {supabaseConfigured && !connectionNotice ? (
-                <>
-                  <Cloud className="w-3.5 h-3.5 text-emerald-600" />
-                  <span className="hidden md:inline">Supabase:</span>
-                  <span>Terkoneksi</span>
-                </>
-              ) : (
-                <>
-                  <Database className="w-3.5 h-3.5 text-amber-600" />
-                  <span className="hidden md:inline">Supabase:</span>
-                  <span>Setup Diperlukan</span>
-                </>
-              )}
+              <Printer className="w-4 h-4 text-slate-600" />
+              <span className="hidden sm:inline">Cetak PDF</span>
             </button>
 
-            {/* Config modal button */}
             <button
               type="button"
               id="btn-open-settings"
               onClick={() => setIsConfigModalOpen(true)}
-              className="p-2 rounded-xl text-slate-600 hover:text-indigo-600 hover:bg-slate-100 border border-slate-200 transition-colors"
+              className="p-2 rounded-xl text-slate-600 hover:text-indigo-600 hover:bg-slate-100 border border-slate-200 transition-colors cursor-pointer"
               title="Pengaturan Database Supabase & Vercel"
             >
               <Settings className="w-4 h-4" />
@@ -148,34 +358,39 @@ export default function App() {
           </div>
         </div>
 
-        {/* Tab Selection Bar */}
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex gap-2 border-t border-slate-100">
+        {/* Page Switcher Navigation */}
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex gap-2 border-t border-slate-100 overflow-x-auto">
+          {/* Index Kegiatan Tab */}
           <button
             type="button"
-            id="tab-form-absensi"
-            onClick={() => setActiveTab('form')}
-            className={`py-3 px-4 text-xs sm:text-sm font-semibold border-b-2 flex items-center gap-2 transition-all cursor-pointer ${
-              activeTab === 'form'
+            id="tab-kegiatan-index"
+            onClick={() => navigateTo('index')}
+            className={`py-3 px-4 text-xs sm:text-sm font-semibold border-b-2 flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+              currentPage === 'index'
                 ? 'border-indigo-600 text-indigo-600'
                 : 'border-transparent text-slate-500 hover:text-slate-900'
             }`}
           >
-            <ClipboardCheck className="w-4 h-4" />
-            <span>Isi Form Absensi</span>
+            <Calendar className="w-4 h-4" />
+            <span>Index Kegiatan</span>
+            <span className="text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 font-normal">
+              {sessions.length}
+            </span>
           </button>
 
+          {/* Rekap Kehadiran Tab */}
           <button
             type="button"
             id="tab-riwayat-absensi"
-            onClick={() => setActiveTab('riwayat')}
-            className={`py-3 px-4 text-xs sm:text-sm font-semibold border-b-2 flex items-center gap-2 transition-all cursor-pointer ${
-              activeTab === 'riwayat'
+            onClick={() => navigateTo('rekap')}
+            className={`py-3 px-4 text-xs sm:text-sm font-semibold border-b-2 flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+              currentPage === 'rekap'
                 ? 'border-indigo-600 text-indigo-600'
                 : 'border-transparent text-slate-500 hover:text-slate-900'
             }`}
           >
             <ListOrdered className="w-4 h-4" />
-            <span>Riwayat Kehadiran</span>
+            <span>Rekapitulasi Kehadiran</span>
             <span className="ml-1 text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 font-normal">
               {records.length}
             </span>
@@ -183,144 +398,27 @@ export default function App() {
         </div>
       </header>
 
-      {/* Notice Banner if Supabase not configured */}
-      {connectionNotice && (
-        <div className="bg-amber-50 border-b border-amber-200 py-2.5 px-4 text-xs text-amber-900">
-          <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>
-                <strong>Perhatian:</strong> {connectionNotice}
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setIsConfigModalOpen(true)}
-              className="font-semibold text-indigo-700 hover:underline whitespace-nowrap"
-            >
-              Atur Supabase Sekarang →
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Main Content Area */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
-        {activeTab === 'form' ? (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Form Column (8 cols on lg) */}
-            <div className="lg:col-span-8">
-              <AbsensiForm
-                onSuccess={handleRecordSuccess}
-                supabaseConfigured={supabaseConfigured && !connectionNotice}
-                onOpenSettings={() => setIsConfigModalOpen(true)}
-              />
-            </div>
+      <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        {currentPage === 'index' && (
+          <KegiatanIndex
+            sessions={sessions}
+            onSelectSession={handleSelectSession}
+            onCreateSession={handleCreateSession}
+            onDeleteSession={handleDeleteSession}
+            onPrintSession={handlePrintSession}
+          />
+        )}
 
-            {/* Sidebar / Quick Stats & Instructions (4 cols on lg) */}
-            <div className="lg:col-span-4 space-y-5">
-              {/* Daily Statistics Card */}
-              <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-5">
-                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                  <CalendarCheck className="w-4 h-4 text-indigo-600" />
-                  <span>Statistik Hari Ini</span>
-                </h3>
-
-                <div className="grid grid-cols-3 gap-2.5">
-                  <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100 text-center">
-                    <span className="block text-2xl font-bold text-emerald-700">
-                      {hadirCount}
-                    </span>
-                    <span className="text-[11px] font-semibold text-emerald-600">Hadir</span>
-                  </div>
-
-                  <div className="p-3 bg-blue-50 rounded-xl border border-blue-100 text-center">
-                    <span className="block text-2xl font-bold text-blue-700">
-                      {dinasCount}
-                    </span>
-                    <span className="text-[11px] font-semibold text-blue-600">Dinas</span>
-                  </div>
-
-                  <div className="p-3 bg-amber-50 rounded-xl border border-amber-100 text-center">
-                    <span className="block text-2xl font-bold text-amber-700">
-                      {izinCount}
-                    </span>
-                    <span className="text-[11px] font-semibold text-amber-600">Izin/Sakit</span>
-                  </div>
-                </div>
-
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-                  <span>Total Presensi Tercatat:</span>
-                  <span className="font-semibold text-slate-800">{records.length} orang</span>
-                </div>
-              </div>
-
-              {/* Petunjuk Pengisian Card */}
-              <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-5 space-y-3">
-                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                  <HelpCircle className="w-4 h-4 text-indigo-600" />
-                  <span>Petunjuk Presensi</span>
-                </h3>
-
-                <ul className="space-y-2 text-xs text-slate-600 leading-relaxed">
-                  <li className="flex items-start gap-2">
-                    <span className="w-4 h-4 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">
-                      1
-                    </span>
-                    <span>Masukkan <strong>Nama Lengkap</strong> sesuai identitas resmi Anda.</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="w-4 h-4 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">
-                      2
-                    </span>
-                    <span>Pilih <strong>Jabatan</strong> atau masukkan jabatan spesifik bila memilih 'Lainnya'.</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="w-4 h-4 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">
-                      3
-                    </span>
-                    <span>
-                      Goreskan <strong>Tanda Tangan Digital</strong> di area kanvas. Anda dapat mengganti warna tinta (Hitam/Biru) atau menggunakan tombol Reset jika ingin mengulang.
-                    </span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="w-4 h-4 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">
-                      4
-                    </span>
-                    <span>Klik <strong>Kirim Presensi Kehadiran</strong> untuk menyimpan ke database.</span>
-                  </li>
-                </ul>
-              </div>
-
-              {/* Supabase & Vercel Integration Info */}
-              <div className="bg-gradient-to-br from-indigo-900 to-slate-900 text-white rounded-2xl p-5 shadow-xs">
-                <div className="flex items-center gap-2 mb-2">
-                  <Database className="w-4 h-4 text-emerald-400" />
-                  <span className="text-xs font-bold text-indigo-200 uppercase tracking-wider">
-                    Supabase + Vercel
-                  </span>
-                </div>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  Data absensi disimpan ke tabel <code>absensi</code> di PostgreSQL Supabase dengan Row Level Security (RLS) terpasang. Siap deploy langsung ke Vercel.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setIsConfigModalOpen(true)}
-                  className="mt-3.5 inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl transition-colors text-white cursor-pointer"
-                >
-                  <span>Lihat Panduan & SQL</span>
-                  <ExternalLink className="w-3 h-3" />
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : (
+        {currentPage === 'rekap' && (
           <div className="space-y-6">
             <AbsensiList
               records={records}
               isLoading={isLoading}
               onRefresh={loadRecords}
               source={dataSource}
+              currentKegiatanJudul={selectedSession?.judul_kegiatan}
+              onOpenPrintView={(recordsToPrint) => navigateTo('print', selectedSession)}
             />
           </div>
         )}
@@ -334,7 +432,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setIsConfigModalOpen(true)}
-              className="hover:text-indigo-600 font-medium"
+              className="hover:text-indigo-600 font-medium cursor-pointer"
             >
               Pengaturan Database
             </button>
@@ -342,10 +440,10 @@ export default function App() {
             <button
               type="button"
               onClick={() => {
-                setActiveTab('riwayat');
+                navigateTo('rekap');
                 loadRecords();
               }}
-              className="hover:text-indigo-600 font-medium"
+              className="hover:text-indigo-600 font-medium cursor-pointer"
             >
               Lihat Rekap
             </button>
